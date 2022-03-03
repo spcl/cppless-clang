@@ -9,17 +9,17 @@
 //  This file implements semantic analysis for C++ lambda expressions.
 //
 //===----------------------------------------------------------------------===//
-#include "clang/Sema/DeclSpec.h"
+#include "clang/Sema/SemaLambda.h"
 #include "TypeLocBuilder.h"
 #include "clang/AST/ASTLambda.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/Basic/TargetInfo.h"
+#include "clang/Sema/DeclSpec.h"
 #include "clang/Sema/Initialization.h"
 #include "clang/Sema/Lookup.h"
 #include "clang/Sema/Scope.h"
 #include "clang/Sema/ScopeInfo.h"
 #include "clang/Sema/SemaInternal.h"
-#include "clang/Sema/SemaLambda.h"
 #include "llvm/ADT/STLExtras.h"
 using namespace clang;
 using namespace sema;
@@ -1746,10 +1746,49 @@ FieldDecl *Sema::BuildCaptureField(RecordDecl *RD,
   return Field;
 }
 
+CXXMethodDecl *Sema::BuildLambdaCaptureCountMethod(CXXRecordDecl *RD,
+                                                   int CaptureCount) {
+  FunctionProtoType::ExtProtoInfo EPI(Context.getDefaultCallingConvention(
+      /*IsVariadic=*/false, /*IsCXXMethod=*/true));
+  QualType IntTy = Context.IntTy;
+  QualType CaptureCountMethodType = Context.getFunctionType(IntTy, None, EPI);
+  DeclarationName CaptureCountMethodName =
+      DeclarationName(&Context.Idents.get("capture_count"));
+  TypeSourceInfo *CaptureCountMethodTypeInfo = Context.getTrivialTypeSourceInfo(
+      CaptureCountMethodType, SourceLocation());
+  CXXMethodDecl *CaptureCountMethod = CXXMethodDecl::Create(
+      Context, RD, SourceLocation(),
+      DeclarationNameInfo(CaptureCountMethodName, SourceLocation()),
+      CaptureCountMethodType, CaptureCountMethodTypeInfo,
+      StorageClass::SC_Static, getCurFPFeatures().isFPConstrained(),
+      /*IsInline*/ true, ConstexprSpecKind::Constexpr, SourceLocation());
+  CaptureCountMethod->setAccess(AS_public);
+
+  // Construct integer literal
+  llvm::APInt CaptureCountAPInt(32, CaptureCount);
+  IntegerLiteral *CaptureCountLiteral = IntegerLiteral::Create(
+      Context, CaptureCountAPInt, Context.IntTy, SourceLocation());
+
+  // Construct ReturnStmt
+  ReturnStmt *CaptureCountReturnStmt = ReturnStmt::Create(
+      Context, SourceLocation(), CaptureCountLiteral, nullptr);
+
+  // Add CompoundStmt as the body of the method.
+  SmallVector<Stmt *, 1> CaptureCountMethodBodyStmts;
+  CaptureCountMethodBodyStmts.push_back(CaptureCountReturnStmt);
+  CompoundStmt *CaptureCountMethodBody = CompoundStmt::Create(
+      Context, CaptureCountMethodBodyStmts, SourceLocation(), SourceLocation());
+  CaptureCountMethod->setBody(CaptureCountMethodBody);
+  RD->addDecl(CaptureCountMethod);
+
+  return CaptureCountMethod;
+}
+
 ExprResult Sema::BuildLambdaExpr(SourceLocation StartLoc, SourceLocation EndLoc,
                                  LambdaScopeInfo *LSI) {
   // Collect information from the lambda scope.
   SmallVector<LambdaCapture, 4> Captures;
+  SmallVector<FieldDecl *, 4> CaptureFields;
   SmallVector<Expr *, 4> CaptureInits;
   SourceLocation CaptureDefaultLoc = LSI->CaptureDefaultLoc;
   LambdaCaptureDefault CaptureDefault =
@@ -1871,8 +1910,9 @@ ExprResult Sema::BuildLambdaExpr(SourceLocation StartLoc, SourceLocation EndLoc,
       // lambda is not externally visible.
 
       // Add a FieldDecl for the capture and form its initializer.
-      BuildCaptureField(Class, From);
+      FieldDecl *CaptureField = BuildCaptureField(Class, From);
       Captures.push_back(Capture);
+      CaptureFields.push_back(CaptureField);
       CaptureInits.push_back(Init.get());
 
       if (LangOpts.CUDA)
@@ -1880,6 +1920,115 @@ ExprResult Sema::BuildLambdaExpr(SourceLocation StartLoc, SourceLocation EndLoc,
     }
 
     Class->setCaptures(Context, Captures);
+
+    BuildLambdaCaptureCountMethod(Class, Captures.size());
+
+    // FunctionTemplateDecl 0x7f9ed906a4d8 <line:11:3, line:12:20> col:16 get
+    // |-NonTypeTemplateParmDecl 0x7f9ed906a2b8 <line:11:13> col:16 'int' depth
+    // 0 index 0
+    // |-CXXMethodDecl 0x7f9ed906a438 <line:12:3, col:20> col:16 get 'auto &()'
+    // inline delete
+    // |-CXXMethod 0x7f9ed906a6b8 'get' 'int &()'
+    // `-CXXMethod 0x7f9ed906aae0 'get' 'double &()'
+
+    DeclarationName GetMethodName =
+        DeclarationName(&Context.Idents.get("capture"));
+
+    IdentifierInfo *GetIndexParamIdent = &Context.Idents.get("I");
+    NonTypeTemplateParmDecl *GetParamDecl = NonTypeTemplateParmDecl::Create(
+        Context, Class, SourceLocation(), SourceLocation(),
+        Class->getTemplateDepth(), 0, GetIndexParamIdent, Context.IntTy, false,
+        nullptr);
+    SmallVector<NamedDecl *, 1> GetParamsDecls;
+    GetParamsDecls.push_back(GetParamDecl);
+
+    FunctionProtoType::ExtProtoInfo EPI(Context.getDefaultCallingConvention(
+        /*IsVariadic=*/false, /*IsCXXMethod=*/true));
+    TemplateParameterList *GetTPL = TemplateParameterList::Create(
+        Context, SourceLocation(), SourceLocation(), GetParamsDecls,
+        SourceLocation(), nullptr);
+    QualType GetMethodType = Context.getFunctionType(
+        Context.getLValueReferenceType(Context.getAutoDeductType()), None, EPI);
+
+    TypeSourceInfo *GetMethodTypeInfo =
+        Context.getTrivialTypeSourceInfo(GetMethodType, SourceLocation());
+    CXXMethodDecl *GetFD = CXXMethodDecl::Create(
+        Context, Class, SourceLocation(),
+        DeclarationNameInfo(GetMethodName, SourceLocation()), GetMethodType,
+        GetMethodTypeInfo, StorageClass::SC_None,
+        getCurFPFeatures().isFPConstrained(),
+        /*IsInline*/ true, ConstexprSpecKind::Unspecified, SourceLocation());
+    GetFD->setDeletedAsWritten();
+    GetFD->setAccess(AS_public);
+    FunctionTemplateDecl *GetFTD = FunctionTemplateDecl::Create(
+        Context, Class, SourceLocation(), GetMethodName, GetTPL, GetFD);
+    GetFD->setDescribedFunctionTemplate(GetFTD);
+    GetFTD->setAccess(AS_public);
+    Class->addDecl(GetFTD);
+
+    int CaptureIndex = 0;
+    for (auto &Capture : CaptureFields) {
+      FunctionProtoType::ExtProtoInfo EPI(Context.getDefaultCallingConvention(
+          /*IsVariadic=*/false, /*IsCXXMethod=*/true));
+      // Get type of capture
+      QualType CaptureType = Capture->getType();
+      QualType GetMethodSpecializedType = Context.getFunctionType(
+          Context.getLValueReferenceType(CaptureType), None, EPI);
+      TypeSourceInfo *GetMethodSpecializedTypeInfo =
+          Context.getTrivialTypeSourceInfo(GetMethodSpecializedType,
+                                           SourceLocation());
+      // Construct the CXMethodDecl which is an explicit template specialization
+      // of get<>() with the type of the capture.
+
+      CXXMethodDecl *GetFDSpec = CXXMethodDecl::Create(
+          Context, Class, SourceLocation(),
+          DeclarationNameInfo(GetMethodName, SourceLocation()),
+          GetMethodSpecializedType, GetMethodSpecializedTypeInfo,
+          StorageClass::SC_None, getCurFPFeatures().isFPConstrained(),
+          /*IsInline*/ false, ConstexprSpecKind::Unspecified, SourceLocation());
+      llvm::SmallVector<TemplateArgument, 1> Args;
+      Args.push_back(TemplateArgument(
+          Context, llvm::APSInt(llvm::APInt(32, CaptureIndex++, false), false),
+          Context.IntTy));
+      TemplateArgumentList *TAL =
+          TemplateArgumentList::CreateCopy(Context, Args);
+      void *GetFDSpecInsertPos = nullptr;
+      GetFTD->findSpecialization(Args, GetFDSpecInsertPos);
+      GetFDSpec->setFunctionTemplateSpecialization(
+          GetFTD, TAL, GetFDSpecInsertPos, TSK_ExplicitSpecialization, nullptr,
+          SourceLocation());
+      GetFDSpec->setAccess(AS_public);
+
+      // Construct body
+
+      // Build MemberExpr
+      CXXThisExpr *ThisExpr = new (Context) CXXThisExpr(
+          SourceLocation(),
+          Context.getPointerType(Context.getTypeDeclType(Class)), true);
+      QualType NonReferenceCaptureType = CaptureType.getNonReferenceType();
+      MemberExpr *GetMemberExpr = MemberExpr::Create(
+          Context, ThisExpr, true, SourceLocation(), NestedNameSpecifierLoc(),
+          SourceLocation(), Capture, DeclAccessPair::make(Capture, AS_none),
+          DeclarationNameInfo(), nullptr, NonReferenceCaptureType,
+          ExprValueKind::VK_LValue, ExprObjectKind::OK_Ordinary,
+          NonOdrUseReason::NOUR_None);
+
+      // Construct ReturnStmt
+
+      ReturnStmt *GetReturnStmt =
+          ReturnStmt::Create(Context, SourceLocation(), GetMemberExpr, nullptr);
+
+      // Construct CompoundStmt
+      SmallVector<Stmt *, 1> GetMethodBodyStmts;
+      GetMethodBodyStmts.push_back(GetReturnStmt);
+      CompoundStmt *GetMethodBody = CompoundStmt::Create(
+          Context, GetMethodBodyStmts, SourceLocation(), SourceLocation());
+
+      // Set CompoundStmt as body
+      GetFDSpec->setBody(GetMethodBody);
+
+      Class->addDecl(GetFDSpec);
+    }
 
     // C++11 [expr.prim.lambda]p6:
     //   The closure type for a lambda-expression with no lambda-capture
