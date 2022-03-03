@@ -6312,3 +6312,13 @@ flag.
 .. _Return-Oriented Programming: https://en.wikipedia.org/wiki/Return-oriented_programming
   }];
 }
+
+def EntryDocs : Documentation {
+  let Category = DocCatFunction;
+  let Heading = "entry";
+  let Content = [{
+  Adds the annotated function as an additional entry point when ``-fadditional-entry`` is used.
+  The method / function should have the same interface as the main function. The main entry point
+  is disabled when ``-fadditional-entry`` is used.
+  }];
+}

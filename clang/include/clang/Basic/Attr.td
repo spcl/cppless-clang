@@ -3929,3 +3929,10 @@ def Error : InheritableAttr {
   let Subjects = SubjectList<[Function], ErrorDiag>;
   let Documentation = [ErrorAttrDocs];
 }
+
+// mark functions which can be called as a PRSC
+def Entry : InheritableAttr {
+  let Spellings = [GNU<"entry">];
+  let Subjects = SubjectList<[Function, CXXMethod]>;
+  let Documentation = [EntryDocs];
+}
