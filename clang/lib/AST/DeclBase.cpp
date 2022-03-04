@@ -450,6 +450,10 @@ bool Decl::isUsed(bool CheckUsedAttr) const {
   if (CheckUsedAttr && getMostRecentDecl()->hasAttr<UsedAttr>())
     return true;
 
+  // Check for entry attribute as well when CheckUsedAttr is set
+  if (CheckUsedAttr && getMostRecentDecl()->hasAttr<EntryAttr>())
+    return true;
+
   // The information may have not been deserialized yet. Force deserialization
   // to complete the needed information.
   return getMostRecentDecl()->getCanonicalDecl()->Used;

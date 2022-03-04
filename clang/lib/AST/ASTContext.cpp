@@ -11489,7 +11489,7 @@ bool ASTContext::DeclMustBeEmitted(const Decl *D) {
     return false;
 
   // Aliases and used decls are required.
-  if (D->hasAttr<AliasAttr>() || D->hasAttr<UsedAttr>())
+  if (D->hasAttr<AliasAttr>() || D->hasAttr<UsedAttr>() || D->hasAttr<EntryAttr>())
     return true;
 
   if (const auto *FD = dyn_cast<FunctionDecl>(D)) {
