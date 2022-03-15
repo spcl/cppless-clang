@@ -1507,38 +1507,6 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
 void EmitAssemblyHelper::RunCodegenPipeline(
     BackendAction Action, std::unique_ptr<raw_pwrite_stream> &OS,
     std::unique_ptr<llvm::ToolOutputFile> &DwoOS) {
-  // We still use the legacy PM to run the codegen pipeline since the new PM
-  // does not work with the codegen pipeline.
-  // FIXME: make the new PM work with the codegen pipeline.
-  legacy::PassManager CodeGenPasses;
-
-  // Append any output we need to the pass manager.
-  switch (Action) {
-  case Backend_EmitAssembly:
-  case Backend_EmitMCNull:
-  case Backend_EmitObj:
-    CodeGenPasses.add(
-        createTargetTransformInfoWrapperPass(getTargetIRAnalysis()));
-    if (!CodeGenOpts.SplitDwarfOutput.empty()) {
-      DwoOS = openOutputFile(CodeGenOpts.SplitDwarfOutput);
-      if (!DwoOS)
-        return;
-    }
-    if (!AddEmitPasses(CodeGenPasses, Action, *OS,
-                       DwoOS ? &DwoOS->os() : nullptr))
-      // FIXME: Should we handle this error differently?
-      return;
-    break;
-  default:
-    return;
-  }
-
-  {
-    PrettyStackTraceString CrashInfo("Code generation");
-    llvm::TimeTraceScope TimeScope("CodeGenPasses");
-    CodeGenPasses.run(*TheModule);
-  }
-
   auto AltEntryOutP = CodeGenOpts.AltEntryOutput;
   if (!AltEntryOutP.empty()) {
     AltEntryPointMeta AlternativeEntryPoints;
@@ -1562,6 +1530,7 @@ void EmitAssemblyHelper::RunCodegenPipeline(
 
       auto ClonedF = ClonedM->getFunction(F.getName());
       ClonedF->setName("main");
+      ClonedF->setLinkage(GlobalValue::ExternalLinkage);
 
       llvm::SmallString<128U> ClonedOutName(Parent);
       llvm::sys::path::append(ClonedOutName,
@@ -1604,6 +1573,38 @@ void EmitAssemblyHelper::RunCodegenPipeline(
     AlternativeEntryPoints.write(J);
 
     MetaOS->keep();
+  }
+
+  // We still use the legacy PM to run the codegen pipeline since the new PM
+  // does not work with the codegen pipeline.
+  // FIXME: make the new PM work with the codegen pipeline.
+  legacy::PassManager CodeGenPasses;
+
+  // Append any output we need to the pass manager.
+  switch (Action) {
+  case Backend_EmitAssembly:
+  case Backend_EmitMCNull:
+  case Backend_EmitObj:
+    CodeGenPasses.add(
+        createTargetTransformInfoWrapperPass(getTargetIRAnalysis()));
+    if (!CodeGenOpts.SplitDwarfOutput.empty()) {
+      DwoOS = openOutputFile(CodeGenOpts.SplitDwarfOutput);
+      if (!DwoOS)
+        return;
+    }
+    if (!AddEmitPasses(CodeGenPasses, Action, *OS,
+                       DwoOS ? &DwoOS->os() : nullptr))
+      // FIXME: Should we handle this error differently?
+      return;
+    break;
+  default:
+    return;
+  }
+
+  {
+    PrettyStackTraceString CrashInfo("Code generation");
+    llvm::TimeTraceScope TimeScope("CodeGenPasses");
+    CodeGenPasses.run(*TheModule);
   }
 }
 
