@@ -4499,6 +4499,10 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     }
   }
 
+  if (Args.hasArg(options::OPT_cppless)) {
+    CmdArgs.push_back("-cppless");
+  }
+
   if (IsOpenMPDevice) {
     // We have to pass the triple of the host if compiling for an OpenMP device.
     std::string NormalizedTriple =
@@ -7137,9 +7141,19 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
         Output.getType() == clang::driver::types::TY_IFS) {
       SmallString<128> OutputFilename(Output.getFilename());
       llvm::sys::path::replace_extension(OutputFilename, "ifs");
+      if (Args.hasFlag(options::OPT_falt_entry, options::OPT_fno_alt_entry)) {
+        CmdArgs.push_back("-alt-entry-output");
+        CmdArgs.push_back(Args.MakeArgString(OutputFilename));
+      }
+
       CmdArgs.push_back("-o");
       CmdArgs.push_back(Args.MakeArgString(OutputFilename));
     } else {
+      if (Args.hasFlag(options::OPT_falt_entry, options::OPT_fno_alt_entry)) {
+        CmdArgs.push_back("-alt-entry-output");
+        CmdArgs.push_back(Output.getFilename());
+      }
+
       CmdArgs.push_back("-o");
       CmdArgs.push_back(Output.getFilename());
     }
