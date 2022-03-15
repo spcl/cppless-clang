@@ -1966,7 +1966,8 @@ void CodeGenModule::SetLLVMFunctionAttributesForDefinition(const Decl *D,
   // functions. If the current target's C++ ABI requires this and this is a
   // member function, set its alignment accordingly.
   if (getTarget().getCXXABI().areMemberFunctionsAligned()) {
-    if (F->getAlignment() < 2 && isa<CXXMethodDecl>(D))
+    if (F->getAlignment() < 2 &&
+        (isa<CXXMethodDecl>(D) && !D->hasAttr<EntryAttr>()))
       F->setAlignment(llvm::Align(2));
   }
 
