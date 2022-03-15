@@ -11,6 +11,7 @@
 #include "ToolChains/Clang.h"
 #include "ToolChains/Flang.h"
 #include "ToolChains/InterfaceStubs.h"
+#include "Tools/CpplessLd.h"
 #include "clang/Basic/ObjCRuntime.h"
 #include "clang/Basic/Sanitizers.h"
 #include "clang/Config/config.h"
@@ -333,6 +334,12 @@ Tool *ToolChain::getLinkerWrapper() const {
   return LinkerWrapper.get();
 }
 
+Tool *ToolChain::getCpplessLd() const {
+  if (!CpplessLd)
+    CpplessLd.reset(new tools::cppless::Linker(*this));
+  return CpplessLd.get();
+}
+
 Tool *ToolChain::getTool(Action::ActionClass AC) const {
   switch (AC) {
   case Action::AssembleJobClass:
@@ -560,6 +567,9 @@ Tool *ToolChain::SelectTool(const JobAction &JA) const {
   Action::ActionClass AC = JA.getKind();
   if (AC == Action::AssembleJobClass && useIntegratedAs())
     return getClangAs();
+  if (AC == Action::LinkJobClass &&
+      Args.hasFlag(options::OPT_falt_entry, options::OPT_fno_alt_entry, false))
+    return getCpplessLd();
   return getTool(AC);
 }
 
