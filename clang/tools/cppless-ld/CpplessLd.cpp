@@ -44,6 +44,8 @@ int main(int argc, char const *argv[]) {
     }
   }
 
+  AltEntryPointMeta ResultMeta;
+
   int id = 0;
   int i = 0;
   for (auto InputFile : InputFiles) {
@@ -79,8 +81,12 @@ int main(int argc, char const *argv[]) {
         }
 
         Args.push_back("-o");
-        Args.push_back(getOutputName(OutputFile, id++));
+        auto OutputName = getOutputName(OutputFile, id);
+        Args.push_back(OutputName);
         llvm::sys::ExecuteAndWait(DriverPath, Args);
+
+        ResultMeta.entryPoints.push_back(
+            AltEntryPoint(E.originalFunctionName, OutputName));
       }
     }
     i++;
@@ -96,6 +102,12 @@ int main(int argc, char const *argv[]) {
   Args.push_back("-o");
   Args.push_back(OutputFile);
   llvm::sys::ExecuteAndWait(DriverPath, Args);
+
+  std::error_code EC;
+  llvm::raw_fd_ostream MetaOS(getJsonMetaPath(OutputFile), EC);
+  // TODO: Add error checking
+  llvm::json::OStream J(MetaOS);
+  ResultMeta.write(J);
 
   return 0;
 }
