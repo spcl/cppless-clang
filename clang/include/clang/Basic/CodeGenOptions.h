@@ -227,6 +227,9 @@ public:
   /// Output filename for the split debug info, not used in the skeleton CU.
   std::string SplitDwarfOutput;
 
+  /// The pattern to be used for outputting the files of alternative entry points
+  std::string AltEntryOutput;
+
   /// Output filename used in the COFF debug information.
   std::string ObjectFilenameForDebug;
 
