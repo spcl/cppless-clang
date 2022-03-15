@@ -28,6 +28,9 @@ void Linker::ConstructJob(Compilation &C, const JobAction &JA,
   newArgv.push_back("-cppless-driver-path");
   newArgv.push_back(C.getDriver().getClangProgramPath());
   for (const auto &II : Inputs) {
+    // Ignore for now
+    if (!II.isFilename())
+      continue;
     newArgv.push_back("-cppless-input");
     newArgv.push_back(II.getFilename());
   }
