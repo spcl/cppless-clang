@@ -4657,6 +4657,30 @@ def fno_sycl : Flag<["-"], "fno-sycl">, Flags<[NoXarchOption, CoreOption]>,
   Group<sycl_Group>, HelpText<"Disables SYCL kernels compilation for device">;
 
 //===----------------------------------------------------------------------===//
+// Cppless Options
+//===----------------------------------------------------------------------===//
+
+def cppless : Flag<["-"], "cppless">, Flags<[NoXarchOption, CoreOption, CC1Option]>,
+  HelpText<"Enable Cppless mode.">,
+  MarshallingInfoFlag<LangOpts<"Cppless">>;
+
+defm alt_entry : BoolFOption<"alt-entry",
+  LangOpts<"EnableAltEntry">, DefaultFalse,
+  PosFlag<SetTrue, [NoXarchOption, CoreOption, CC1Option], "Use">, NegFlag<SetFalse, [], "Don't use">,
+  BothFlags<[], " alternative entry points">>,
+  ShouldParseIf<cppless.KeyPath>;
+defm main_entry :  BoolFOption<"main-entry",
+  LangOpts<"EnableMainEntry">, DefaultTrue,
+  PosFlag<SetTrue, [NoXarchOption, CoreOption], "Use">, NegFlag<SetFalse, [], "Don't use">,
+  BothFlags<[], " main entry point">>,
+  ShouldParseIf<cppless.KeyPath>;
+
+def alt_entry_output : Separate<["-"], "alt-entry-output">,
+  Flags<[NoXarchOption, CC1Option]>,
+  HelpText<"File name pattern to use for alternate entry output">,
+  MarshallingInfoString<CodeGenOpts<"AltEntryOutput">>;
+
+//===----------------------------------------------------------------------===//
 // FLangOption + CoreOption + NoXarchOption
 //===----------------------------------------------------------------------===//
 let Flags = [FlangOption, FlangOnlyOption, NoXarchOption, CoreOption] in {
