@@ -451,6 +451,8 @@ void CodeGenFunction::EmitStaticVarDecl(const VarDecl &D,
     CGM.addUsedGlobal(var);
   else if (D.hasAttr<UsedAttr>())
     CGM.addUsedOrCompilerUsedGlobal(var);
+  else if (D.hasAttr<EntryAttr>())
+    CGM.addUsedOrCompilerUsedGlobal(var);
 
   // We may have to cast the constant because of the initializer
   // mismatch above.

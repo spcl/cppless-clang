@@ -476,6 +476,8 @@ public:
 
   bool isSYCL() const { return SYCLIsDevice || SYCLIsHost; }
 
+  bool isCppless() const { return Cppless; }
+
   /// Remap path prefix according to -fmacro-prefix-path option.
   void remapPathPrefix(SmallString<256> &Path) const;
 };

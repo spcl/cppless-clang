@@ -9815,7 +9815,7 @@ Sema::ActOnFunctionDeclarator(Scope *S, Declarator &D, DeclContext *DC,
 
     // Perform semantic checking on the function declaration.
     if (!isDependentClassScopeExplicitSpecialization) {
-      if (!NewFD->isInvalidDecl() && NewFD->isMain())
+      if (!NewFD->isInvalidDecl() && (NewFD->isMain() || NewFD->hasAttr<EntryAttr>()))
         CheckMain(NewFD, D.getDeclSpec());
 
       if (!NewFD->isInvalidDecl() && NewFD->isMSVCRTEntryPoint())
@@ -10864,7 +10864,9 @@ static bool CheckMultiVersionFunction(Sema &S, FunctionDecl *NewFD,
 
   // Main isn't allowed to become a multiversion function, however it IS
   // permitted to have 'main' be marked with the 'target' optimization hint.
-  if (NewFD->isMain()) {
+  // Functions and methods declared with __attribute((entry)) are treated as 
+  // alternative entry points, thus are not allowed to be multiversion.
+  if (NewFD->isMain() || NewFD->hasAttr<EntryAttr>()) {
     if (MVType != MultiVersionKind::None &&
         !(MVType == MultiVersionKind::Target && !NewTA->isDefaultVersion())) {
       S.Diag(NewFD->getLocation(), diag::err_multiversion_not_allowed_on_main);
@@ -11287,7 +11289,7 @@ void Sema::CheckMain(FunctionDecl* FD, const DeclSpec& DS) {
   //   appear in a declaration of main.
   // static main is not an error under C99, but we should warn about it.
   // We accept _Noreturn main as an extension.
-  if (FD->getStorageClass() == SC_Static)
+  if (FD->getStorageClass() == SC_Static && !isa<CXXMethodDecl>(FD))
     Diag(DS.getStorageClassSpecLoc(), getLangOpts().CPlusPlus
          ? diag::err_static_main : diag::warn_static_main)
       << FixItHint::CreateRemoval(DS.getStorageClassSpecLoc());

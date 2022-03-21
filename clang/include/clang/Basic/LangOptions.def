@@ -263,6 +263,10 @@ LANGOPT(SYCLIsDevice      , 1, 0, "Generate code for SYCL device")
 LANGOPT(SYCLIsHost        , 1, 0, "SYCL host compilation")
 ENUM_LANGOPT(SYCLVersion  , SYCLMajorVersion, 2, SYCL_None, "Version of the SYCL standard used")
 
+LANGOPT(Cppless, 1, 0, "Cppless mode")
+LANGOPT(EnableAltEntry, 1, 0, "Enable alternative entry points")
+LANGOPT(EnableMainEntry, 1, 0, "Disable main entry point")
+
 LANGOPT(HIPUseNewLaunchAPI, 1, 0, "Use new kernel launching API for HIP")
 
 LANGOPT(SizedDeallocation , 1, 0, "sized deallocation")

@@ -962,7 +962,8 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
   //     are not compiled for the device.
   if (FD && ((getLangOpts().CPlusPlus && FD->isMain()) ||
              getLangOpts().OpenCL || getLangOpts().SYCLIsDevice ||
-             (getLangOpts().CUDA && FD->hasAttr<CUDAGlobalAttr>())))
+             (getLangOpts().CUDA && FD->hasAttr<CUDAGlobalAttr>()) ||
+             FD->hasAttr<EntryAttr>()))
     Fn->addFnAttr(llvm::Attribute::NoRecurse);
 
   llvm::RoundingMode RM = getLangOpts().getFPRoundingMode();
@@ -979,12 +980,13 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
 
   // If a custom alignment is used, force realigning to this alignment on
   // any main function which certainly will need it.
-  if (FD && ((FD->isMain() || FD->isMSVCRTEntryPoint()) &&
-             CGM.getCodeGenOpts().StackAlignment))
+  if (FD &&
+      ((FD->isMain() || FD->isMSVCRTEntryPoint() || FD->hasAttr<EntryAttr>()) &&
+       CGM.getCodeGenOpts().StackAlignment))
     Fn->addFnAttr("stackrealign");
 
   // "main" doesn't need to zero out call-used registers.
-  if (FD && FD->isMain())
+  if (FD && (FD->isMain() || FD->hasAttr<EntryAttr>()))
     Fn->removeFnAttr("zero-call-used-regs");
 
   llvm::BasicBlock *EntryBB = createBasicBlock("entry", CurFn);

@@ -226,6 +226,9 @@ static bool isValidCoroutineContext(Sema &S, SourceLocation Loc,
   // [basic.start.main]p3: "The function main shall not be a coroutine."
   else if (FD->isMain())
     return DiagInvalid(DiagMain);
+  // Functions declared as entry points also cannot be coroutines.
+  else if (FD->hasAttr<EntryAttr>())
+    return DiagInvalid(DiagMain);
 
   // Emit a diagnostics for each of the following conditions which is not met.
   // [expr.const]p2: "An expression e is a core constant expression unless the
