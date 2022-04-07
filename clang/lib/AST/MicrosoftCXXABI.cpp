@@ -112,8 +112,8 @@ public:
              "Unexpected combination of C++ ABIs.");
       DeviceMangler.reset(
           Context.createMangleContext(Context.getAuxTargetInfo()));
-    }
-    else if (Context.getLangOpts().isSYCL()) {
+    } else if (Context.getLangOpts().isSYCL() ||
+               Context.getLangOpts().isCppless()) {
       DeviceMangler.reset(
           ItaniumMangleContext::create(Context, Context.getDiagnostics()));
     }
@@ -179,7 +179,8 @@ public:
     if (Context.getLangOpts().CUDA && Context.getAuxTargetInfo()) {
       assert(DeviceMangler && "Missing device mangler");
       return std::make_unique<MSHIPNumberingContext>(DeviceMangler.get());
-    } else if (Context.getLangOpts().isSYCL()) {
+    } else if (Context.getLangOpts().isSYCL() ||
+               Context.getLangOpts().isCppless()) {
       assert(DeviceMangler && "Missing device mangler");
       return std::make_unique<MSSYCLNumberingContext>(DeviceMangler.get());
     }

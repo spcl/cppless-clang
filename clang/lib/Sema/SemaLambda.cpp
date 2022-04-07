@@ -462,7 +462,7 @@ void Sema::handleLambdaNumbering(
       getCurrentMangleNumberContext(Class->getDeclContext());
   bool HasKnownInternalLinkage = false;
   if (!MCtx && (getLangOpts().CUDA || getLangOpts().SYCLIsDevice ||
-                getLangOpts().SYCLIsHost)) {
+                getLangOpts().SYCLIsHost || getLangOpts().Cppless)) {
     // Force lambda numbering in CUDA/HIP as we need to name lambdas following
     // ODR. Both device- and host-compilation need to have a consistent naming
     // on kernel functions. As lambdas are potential part of these `__global__`
