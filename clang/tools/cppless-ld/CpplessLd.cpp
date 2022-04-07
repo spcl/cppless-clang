@@ -81,12 +81,12 @@ int main(int argc, char const *argv[]) {
         }
 
         Args.push_back("-o");
-        auto OutputName = getOutputName(OutputFile, id);
+        auto OutputName = getOutputName(OutputFile, id++);
         Args.push_back(OutputName);
         llvm::sys::ExecuteAndWait(DriverPath, Args);
 
         ResultMeta.entryPoints.push_back(
-            AltEntryPoint(E.originalFunctionName, OutputName));
+            AltEntryPoint(E.originalFunctionName, OutputName, E.userMeta));
       }
     }
     i++;
