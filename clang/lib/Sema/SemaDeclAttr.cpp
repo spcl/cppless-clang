@@ -1114,6 +1114,11 @@ static void handleDiagnoseIfAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
       S.Context, AL, Cond, Msg, DiagType, ArgDependent, cast<NamedDecl>(D)));
 }
 
+static void handleMetaAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
+  Expr *Meta = AL.getArgAsExpr(0);
+  D->addAttr(::new (S.Context) MetaAttr(S.Context, AL, Meta));
+}
+
 static void handleNoBuiltinAttr(Sema &S, Decl *D, const ParsedAttr &AL) {
   static constexpr const StringRef kWildcard = "*";
 
@@ -8872,6 +8877,9 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
 
   case ParsedAttr::AT_Entry:
     handleSimpleAttribute<EntryAttr>(S, D, AL);
+    break;
+  case ParsedAttr::AT_Meta:
+    handleMetaAttr(S, D, AL);
     break;
   }
 }

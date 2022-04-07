@@ -519,6 +519,10 @@ static void InitializeStandardPredefinedMacros(const TargetInfo &TI,
       Builder.defineMacro("SYCL_LANGUAGE_VERSION", "202001");
   }
 
+  if (LangOpts.Cppless) {
+    Builder.defineMacro("__CPPLESS__");
+  }
+
   // Not "standard" per se, but available even with the -undef flag.
   if (LangOpts.AsmPreprocessor)
     Builder.defineMacro("__ASSEMBLER__");

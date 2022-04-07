@@ -1515,11 +1515,11 @@ void EmitAssemblyHelper::RunCodegenPipeline(
 
     int i = 0;
     for (auto &F : TheModule->getFunctionList()) {
-      if (F.getMetadata("__entry") == nullptr)
+      if (!F.getFnAttribute("cppless-entry").isValid())
         continue;
       std::unique_ptr<llvm::Module> ClonedM = CloneModule(*TheModule);
 
-      auto ClonedMain = ClonedM->getFunction("main");
+      auto *ClonedMain = ClonedM->getFunction("main");
       if (ClonedMain) {
         // There shouldn't be any uses of the main function, but if there are
         // we need to remove them
@@ -1528,7 +1528,7 @@ void EmitAssemblyHelper::RunCodegenPipeline(
         ClonedMain->eraseFromParent();
       }
 
-      auto ClonedF = ClonedM->getFunction(F.getName());
+      auto *ClonedF = ClonedM->getFunction(F.getName());
       ClonedF->setName("main");
       ClonedF->setLinkage(GlobalValue::ExternalLinkage);
 
@@ -1554,10 +1554,18 @@ void EmitAssemblyHelper::RunCodegenPipeline(
         return;
       }
 
-      AlternativeEntryPoints.push_back(
-          AltEntryPoint(F.getName().str(), ClonedOutName.str().str()));
+      std::string UserMeta;
+      UserMeta.clear();
+      auto MA = F.getFnAttribute("cppless-meta");
+      if (MA.isStringAttribute())
+        UserMeta = MA.getValueAsString().str();
+
+      AlternativeEntryPoints.push_back(AltEntryPoint(
+          F.getName().str(), ClonedOutName.str().str(), UserMeta));
 
       CodeGenPasses.run(*ClonedM);
+
+      // TODO: Find out whether we need to keep this
       OS->keep();
       i++;
     }
@@ -1572,6 +1580,7 @@ void EmitAssemblyHelper::RunCodegenPipeline(
     llvm::json::OStream J(MetaOS->os());
     AlternativeEntryPoints.write(J);
 
+    // TODO: Find out whether we need to keep this
     MetaOS->keep();
   }
 

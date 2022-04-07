@@ -28,6 +28,7 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtObjC.h"
+#include "clang/AST/Type.h"
 #include "clang/Basic/Builtins.h"
 #include "clang/Basic/CodeGenOptions.h"
 #include "clang/Basic/TargetInfo.h"
@@ -43,8 +44,10 @@
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/Support/CRC.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar/LowerExpectIntrinsic.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
+#include <iostream>
 
 using namespace clang;
 using namespace CodeGen;
@@ -965,6 +968,55 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
              (getLangOpts().CUDA && FD->hasAttr<CUDAGlobalAttr>()) ||
              FD->hasAttr<EntryAttr>()))
     Fn->addFnAttr(llvm::Attribute::NoRecurse);
+  if (FD && (FD->hasAttr<EntryAttr>())) {
+    Fn->addFnAttr("cppless-entry");
+
+    // Iterate through all decls
+
+    for (auto *decl : FD->decls()) {
+      if (decl->getKind() == Decl::Kind::Var) {
+        // Evaluate as constexpr
+        auto *VD = cast<VarDecl>(decl);
+        if (!VD->isConstexpr())
+          continue;
+        auto *V = VD->evaluateValue();
+        if (V == nullptr)
+          continue;
+        VD->getType().print(llvm::errs(), getContext().getPrintingPolicy(), "",
+                            3);
+        V->printPretty(llvm::errs(), getContext(), VD->getType());
+      }
+    }
+  }
+  if (FD && (FD->hasAttr<MetaAttr>())) {
+    auto *MA = FD->getAttr<MetaAttr>();
+    auto *MV = MA->getValue();
+
+    // Evaluate
+    Expr::EvalResult Result;
+    if (MV->EvaluateAsConstantExpr(Result, getContext())) {
+      auto V = Result.Val;
+      if (V.isStruct()) {
+        auto FF = V.getStructField(0);
+        if (FF.isArray()) {
+          auto length = FF.getArrayInitializedElts();
+          std::string output;
+          // We assume that the array is null terminated
+          for (size_t i = 0; i < length - 1; i++) {
+            auto CV = FF.getArrayInitializedElt(i);
+            if (CV.isInt()) {
+              output.push_back((char)(CV.getInt().getLimitedValue()));
+            }
+          }
+          Fn->addFnAttr("cppless-meta", output);
+        }
+      }
+
+    } else {
+      llvm::errs() << "Evaluation failed\n";
+    }
+    llvm::errs() << "\n";
+  }
 
   llvm::RoundingMode RM = getLangOpts().getFPRoundingMode();
   llvm::fp::ExceptionBehavior FPExceptionBehavior =

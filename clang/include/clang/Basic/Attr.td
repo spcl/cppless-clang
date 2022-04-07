@@ -3936,3 +3936,13 @@ def Entry : InheritableAttr {
   let Subjects = SubjectList<[Function, CXXMethod]>;
   let Documentation = [EntryDocs];
 }
+
+def Meta : InheritableAttr {
+  let Spellings = [GNU<"meta">];
+  let Subjects = SubjectList<[Function, CXXMethod]>;
+  let Args = [ExprArgument<"Value">];
+  let InheritEvenIfAlreadyPresent = 1;
+  let LateParsed = 1;
+  let TemplateDependent = 1;
+  let Documentation = [MetaDocs];
+}

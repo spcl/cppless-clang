@@ -8,9 +8,12 @@ class AltEntryPoint {
 public:
   std::string originalFunctionName;
   std::string filename;
+  std::string userMeta;
   // Constructor
-  AltEntryPoint(std::string originalFunctionName, std::string filename)
-      : originalFunctionName(originalFunctionName), filename(filename) {}
+  AltEntryPoint(std::string originalFunctionName, std::string filename,
+                std::string userMeta = "")
+      : originalFunctionName(originalFunctionName), filename(filename),
+        userMeta(userMeta) {}
 };
 
 class AltEntryPointMeta {
@@ -29,6 +32,7 @@ public:
           J.object([&]() {
             J.attribute("original_function_name", e.originalFunctionName);
             J.attribute("filename", e.filename);
+            J.attribute("user_meta", e.userMeta);
           });
         }
       });
@@ -67,7 +71,7 @@ public:
         return;
       }
 
-      // Get the filename of the entry point
+      // Get the name that the function originally had
       llvm::Optional<llvm::StringRef> EOriginalFunctionName =
           Entry->getString("original_function_name");
       if (!EOriginalFunctionName.hasValue()) {
@@ -76,8 +80,17 @@ public:
         return;
       }
 
+      // Get the user meta
+      llvm::Optional<llvm::StringRef> EUserMeta = Entry->getString("user_meta");
+      if (!EUserMeta.hasValue()) {
+        llvm::errs() << "Failed to parse: (entry_points element has no "
+                        "user_meta)\n";
+        return;
+      }
+
       entryPoints.push_back(AltEntryPoint(
-          EOriginalFunctionName.getValue().str(), EFilename.getValue().str()));
+          EOriginalFunctionName.getValue().str(), EFilename.getValue().str(),
+          EUserMeta.getValue().str()));
     }
   }
 };
