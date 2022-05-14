@@ -109,7 +109,11 @@ public:
                            const CXXRecordDecl *Type, raw_ostream &) override;
   void mangleCXXRTTI(QualType T, raw_ostream &) override;
   void mangleCXXRTTIName(QualType T, raw_ostream &) override;
+  void mangleCXXRTTIName(QualType T, raw_ostream &,
+                         bool IgnoreInlineNamespaces);
   void mangleTypeName(QualType T, raw_ostream &) override;
+  void mangleTypeNameIgnoringInlineNamespaces(QualType T,
+                                              raw_ostream &) override;
 
   void mangleCXXCtorComdat(const CXXConstructorDecl *D, raw_ostream &) override;
   void mangleCXXDtorComdat(const CXXDestructorDecl *D, raw_ostream &) override;
@@ -213,6 +217,7 @@ class CXXNameMangler {
   ItaniumMangleContextImpl &Context;
   raw_ostream &Out;
   bool NullOut = false;
+  bool IgnoreInlineNamespaces = false;
   /// In the "DisableDerivedAbiTags" mode derived ABI tags are not calculated.
   /// This mode is used when mangler creates another mangler recursively to
   /// calculate ABI tags for the function return value or the variable type.
@@ -394,9 +399,11 @@ class CXXNameMangler {
 
 public:
   CXXNameMangler(ItaniumMangleContextImpl &C, raw_ostream &Out_,
-                 const NamedDecl *D = nullptr, bool NullOut_ = false)
-      : Context(C), Out(Out_), NullOut(NullOut_), Structor(getStructor(D)),
-        AbiTagsRoot(AbiTags) {
+                 const NamedDecl *D = nullptr, bool NullOut_ = false,
+                 bool IgnoreInlineNamespaces = false)
+      : Context(C), Out(Out_), NullOut(NullOut_),
+        IgnoreInlineNamespaces(IgnoreInlineNamespaces),
+        Structor(getStructor(D)), AbiTagsRoot(AbiTags) {
     // These can't be mangled without a ctor type or dtor type.
     assert(!D || (!isa<CXXDestructorDecl>(D) &&
                   !isa<CXXConstructorDecl>(D)));
@@ -906,7 +913,9 @@ bool CXXNameMangler::isStdNamespace(const DeclContext *DC) {
   if (!DC->isNamespace())
     return false;
 
-  return isStd(cast<NamespaceDecl>(DC));
+  return isStd(cast<NamespaceDecl>(DC)) ||
+         (IgnoreInlineNamespaces && cast<NamespaceDecl>(DC)->isInline() &&
+          isStdNamespace(DC->getParent()));
 }
 
 static const GlobalDecl
@@ -1345,7 +1354,6 @@ void CXXNameMangler::mangleUnresolvedPrefix(NestedNameSpecifier *qualifier,
                              /*recursive*/ true);
     else
       Out << "sr";
-
     mangleSourceName(qualifier->getAsIdentifier());
     // An Identifier has no type information, so we can't emit abi tags for it.
     break;
@@ -1409,190 +1417,191 @@ void CXXNameMangler::mangleUnqualifiedName(GlobalDecl GD,
   //                     ::= <ctor-dtor-name>
   //                     ::= <source-name>
   switch (Name.getNameKind()) {
-  case DeclarationName::Identifier: {
-    const IdentifierInfo *II = Name.getAsIdentifierInfo();
+    y case DeclarationName::Identifier : {
+      const IdentifierInfo *II = Name.getAsIdentifierInfo();
 
-    // We mangle decomposition declarations as the names of their bindings.
-    if (auto *DD = dyn_cast<DecompositionDecl>(ND)) {
-      // FIXME: Non-standard mangling for decomposition declarations:
-      //
-      //  <unqualified-name> ::= DC <source-name>* E
-      //
-      // These can never be referenced across translation units, so we do
-      // not need a cross-vendor mangling for anything other than demanglers.
-      // Proposed on cxx-abi-dev on 2016-08-12
-      Out << "DC";
-      for (auto *BD : DD->bindings())
-        mangleSourceName(BD->getDeclName().getAsIdentifierInfo());
-      Out << 'E';
-      writeAbiTags(ND, AdditionalAbiTags);
-      break;
-    }
-
-    if (auto *GD = dyn_cast<MSGuidDecl>(ND)) {
-      // We follow MSVC in mangling GUID declarations as if they were variables
-      // with a particular reserved name. Continue the pretense here.
-      SmallString<sizeof("_GUID_12345678_1234_1234_1234_1234567890ab")> GUID;
-      llvm::raw_svector_ostream GUIDOS(GUID);
-      Context.mangleMSGuidDecl(GD, GUIDOS);
-      Out << GUID.size() << GUID;
-      break;
-    }
-
-    if (auto *TPO = dyn_cast<TemplateParamObjectDecl>(ND)) {
-      // Proposed in https://github.com/itanium-cxx-abi/cxx-abi/issues/63.
-      Out << "TA";
-      mangleValueInTemplateArg(TPO->getType().getUnqualifiedType(),
-                               TPO->getValue(), /*TopLevel=*/true);
-      break;
-    }
-
-    if (II) {
-      // Match GCC's naming convention for internal linkage symbols, for
-      // symbols that are not actually visible outside of this TU. GCC
-      // distinguishes between internal and external linkage symbols in
-      // its mangling, to support cases like this that were valid C++ prior
-      // to DR426:
-      //
-      //   void test() { extern void foo(); }
-      //   static void foo();
-      //
-      // Don't bother with the L marker for names in anonymous namespaces; the
-      // 12_GLOBAL__N_1 mangling is quite sufficient there, and this better
-      // matches GCC anyway, because GCC does not treat anonymous namespaces as
-      // implying internal linkage.
-      if (Context.isInternalLinkageDecl(ND))
-        Out << 'L';
-
-      auto *FD = dyn_cast<FunctionDecl>(ND);
-      bool IsRegCall = FD &&
-                       FD->getType()->castAs<FunctionType>()->getCallConv() ==
-                           clang::CC_X86RegCall;
-      bool IsDeviceStub =
-          FD && FD->hasAttr<CUDAGlobalAttr>() &&
-          GD.getKernelReferenceKind() == KernelReferenceKind::Stub;
-      if (IsDeviceStub)
-        mangleDeviceStubName(II);
-      else if (IsRegCall)
-        mangleRegCallName(II);
-      else
-        mangleSourceName(II);
-
-      writeAbiTags(ND, AdditionalAbiTags);
-      break;
-    }
-
-    // Otherwise, an anonymous entity.  We must have a declaration.
-    assert(ND && "mangling empty name without declaration");
-
-    if (const NamespaceDecl *NS = dyn_cast<NamespaceDecl>(ND)) {
-      if (NS->isAnonymousNamespace()) {
-        // This is how gcc mangles these names.
-        Out << "12_GLOBAL__N_1";
+      // We mangle decomposition declarations as the names of their bindings.
+      if (auto *DD = dyn_cast<DecompositionDecl>(ND)) {
+        // FIXME: Non-standard mangling for decomposition declarations:
+        //
+        //  <unqualified-name> ::= DC <source-name>* E
+        //
+        // These can never be referenced across translation units, so we do
+        // not need a cross-vendor mangling for anything other than demanglers.
+        // Proposed on cxx-abi-dev on 2016-08-12
+        Out << "DC";
+        for (auto *BD : DD->bindings())
+          mangleSourceName(BD->getDeclName().getAsIdentifierInfo());
+        Out << 'E';
+        writeAbiTags(ND, AdditionalAbiTags);
         break;
       }
-    }
 
-    if (const VarDecl *VD = dyn_cast<VarDecl>(ND)) {
-      // We must have an anonymous union or struct declaration.
-      const RecordDecl *RD = VD->getType()->castAs<RecordType>()->getDecl();
-
-      // Itanium C++ ABI 5.1.2:
-      //
-      //   For the purposes of mangling, the name of an anonymous union is
-      //   considered to be the name of the first named data member found by a
-      //   pre-order, depth-first, declaration-order walk of the data members of
-      //   the anonymous union. If there is no such data member (i.e., if all of
-      //   the data members in the union are unnamed), then there is no way for
-      //   a program to refer to the anonymous union, and there is therefore no
-      //   need to mangle its name.
-      assert(RD->isAnonymousStructOrUnion()
-             && "Expected anonymous struct or union!");
-      const FieldDecl *FD = RD->findFirstNamedDataMember();
-
-      // It's actually possible for various reasons for us to get here
-      // with an empty anonymous struct / union.  Fortunately, it
-      // doesn't really matter what name we generate.
-      if (!FD) break;
-      assert(FD->getIdentifier() && "Data member name isn't an identifier!");
-
-      mangleSourceName(FD->getIdentifier());
-      // Not emitting abi tags: internal name anyway.
-      break;
-    }
-
-    // Class extensions have no name as a category, and it's possible
-    // for them to be the semantic parent of certain declarations
-    // (primarily, tag decls defined within declarations).  Such
-    // declarations will always have internal linkage, so the name
-    // doesn't really matter, but we shouldn't crash on them.  For
-    // safety, just handle all ObjC containers here.
-    if (isa<ObjCContainerDecl>(ND))
-      break;
-
-    // We must have an anonymous struct.
-    const TagDecl *TD = cast<TagDecl>(ND);
-    if (const TypedefNameDecl *D = TD->getTypedefNameForAnonDecl()) {
-      assert(TD->getDeclContext() == D->getDeclContext() &&
-             "Typedef should not be in another decl context!");
-      assert(D->getDeclName().getAsIdentifierInfo() &&
-             "Typedef was not named!");
-      mangleSourceName(D->getDeclName().getAsIdentifierInfo());
-      assert(!AdditionalAbiTags && "Type cannot have additional abi tags");
-      // Explicit abi tags are still possible; take from underlying type, not
-      // from typedef.
-      writeAbiTags(TD, nullptr);
-      break;
-    }
-
-    // <unnamed-type-name> ::= <closure-type-name>
-    //
-    // <closure-type-name> ::= Ul <lambda-sig> E [ <nonnegative number> ] _
-    // <lambda-sig> ::= <template-param-decl>* <parameter-type>+
-    //     # Parameter types or 'v' for 'void'.
-    if (const CXXRecordDecl *Record = dyn_cast<CXXRecordDecl>(TD)) {
-      llvm::Optional<unsigned> DeviceNumber =
-          Context.getDiscriminatorOverride()(Context.getASTContext(), Record);
-
-      // If we have a device-number via the discriminator, use that to mangle
-      // the lambda, otherwise use the typical lambda-mangling-number. In either
-      // case, a '0' should be mangled as a normal unnamed class instead of as a
-      // lambda.
-      if (Record->isLambda() &&
-          ((DeviceNumber && *DeviceNumber > 0) ||
-           (!DeviceNumber && Record->getLambdaManglingNumber() > 0))) {
-        assert(!AdditionalAbiTags &&
-               "Lambda type cannot have additional abi tags");
-        mangleLambda(Record);
+      if (auto *GD = dyn_cast<MSGuidDecl>(ND)) {
+        // We follow MSVC in mangling GUID declarations as if they were
+        // variables with a particular reserved name. Continue the pretense
+        // here.
+        SmallString<sizeof("_GUID_12345678_1234_1234_1234_1234567890ab")> GUID;
+        llvm::raw_svector_ostream GUIDOS(GUID);
+        Context.mangleMSGuidDecl(GD, GUIDOS);
+        Out << GUID.size() << GUID;
         break;
       }
-    }
 
-    if (TD->isExternallyVisible()) {
-      unsigned UnnamedMangle = getASTContext().getManglingNumber(TD);
-      Out << "Ut";
-      if (UnnamedMangle > 1)
-        Out << UnnamedMangle - 2;
-      Out << '_';
-      writeAbiTags(TD, AdditionalAbiTags);
+      if (auto *TPO = dyn_cast<TemplateParamObjectDecl>(ND)) {
+        // Proposed in https://github.com/itanium-cxx-abi/cxx-abi/issues/63.
+        Out << "TA";
+        mangleValueInTemplateArg(TPO->getType().getUnqualifiedType(),
+                                 TPO->getValue(), /*TopLevel=*/true);
+        break;
+      }
+
+      if (II) {
+        // Match GCC's naming convention for internal linkage symbols, for
+        // symbols that are not actually visible outside of this TU. GCC
+        // distinguishes between internal and external linkage symbols in
+        // its mangling, to support cases like this that were valid C++ prior
+        // to DR426:
+        //
+        //   void test() { extern void foo(); }
+        //   static void foo();
+        //
+        // Don't bother with the L marker for names in anonymous namespaces; the
+        // 12_GLOBAL__N_1 mangling is quite sufficient there, and this better
+        // matches GCC anyway, because GCC does not treat anonymous namespaces
+        // as implying internal linkage.
+        if (Context.isInternalLinkageDecl(ND))
+          Out << 'L';
+
+        auto *FD = dyn_cast<FunctionDecl>(ND);
+        bool IsRegCall =
+            FD && FD->getType()->castAs<FunctionType>()->getCallConv() ==
+                      clang::CC_X86RegCall;
+        bool IsDeviceStub =
+            FD && FD->hasAttr<CUDAGlobalAttr>() &&
+            GD.getKernelReferenceKind() == KernelReferenceKind::Stub;
+        if (IsDeviceStub)
+          mangleDeviceStubName(II);
+        else if (IsRegCall)
+          mangleRegCallName(II);
+        else
+          mangleSourceName(II);
+
+        writeAbiTags(ND, AdditionalAbiTags);
+        break;
+      }
+
+      // Otherwise, an anonymous entity.  We must have a declaration.
+      assert(ND && "mangling empty name without declaration");
+
+      if (const NamespaceDecl *NS = dyn_cast<NamespaceDecl>(ND)) {
+        if (NS->isAnonymousNamespace()) {
+          // This is how gcc mangles these names.
+          Out << "12_GLOBAL__N_1";
+          break;
+        }
+      }
+
+      if (const VarDecl *VD = dyn_cast<VarDecl>(ND)) {
+        // We must have an anonymous union or struct declaration.
+        const RecordDecl *RD = VD->getType()->castAs<RecordType>()->getDecl();
+
+        // Itanium C++ ABI 5.1.2:
+        //
+        //   For the purposes of mangling, the name of an anonymous union is
+        //   considered to be the name of the first named data member found by a
+        //   pre-order, depth-first, declaration-order walk of the data members
+        //   of the anonymous union. If there is no such data member (i.e., if
+        //   all of the data members in the union are unnamed), then there is no
+        //   way for a program to refer to the anonymous union, and there is
+        //   therefore no need to mangle its name.
+        assert(RD->isAnonymousStructOrUnion() &&
+               "Expected anonymous struct or union!");
+        const FieldDecl *FD = RD->findFirstNamedDataMember();
+
+        // It's actually possible for various reasons for us to get here
+        // with an empty anonymous struct / union.  Fortunately, it
+        // doesn't really matter what name we generate.
+        if (!FD)
+          break;
+        assert(FD->getIdentifier() && "Data member name isn't an identifier!");
+        mangleSourceName(FD->getIdentifier());
+        // Not emitting abi tags: internal name anyway.
+        break;
+      }
+
+      // Class extensions have no name as a category, and it's possible
+      // for them to be the semantic parent of certain declarations
+      // (primarily, tag decls defined within declarations).  Such
+      // declarations will always have internal linkage, so the name
+      // doesn't really matter, but we shouldn't crash on them.  For
+      // safety, just handle all ObjC containers here.
+      if (isa<ObjCContainerDecl>(ND))
+        break;
+
+      // We must have an anonymous struct.
+      const TagDecl *TD = cast<TagDecl>(ND);
+      if (const TypedefNameDecl *D = TD->getTypedefNameForAnonDecl()) {
+        assert(TD->getDeclContext() == D->getDeclContext() &&
+               "Typedef should not be in another decl context!");
+        assert(D->getDeclName().getAsIdentifierInfo() &&
+               "Typedef was not named!");
+        mangleSourceName(D->getDeclName().getAsIdentifierInfo());
+        assert(!AdditionalAbiTags && "Type cannot have additional abi tags");
+        // Explicit abi tags are still possible; take from underlying type, not
+        // from typedef.
+        writeAbiTags(TD, nullptr);
+        break;
+      }
+
+      // <unnamed-type-name> ::= <closure-type-name>
+      //
+      // <closure-type-name> ::= Ul <lambda-sig> E [ <nonnegative number> ] _
+      // <lambda-sig> ::= <template-param-decl>* <parameter-type>+
+      //     # Parameter types or 'v' for 'void'.
+      if (const CXXRecordDecl *Record = dyn_cast<CXXRecordDecl>(TD)) {
+        llvm::Optional<unsigned> DeviceNumber =
+            Context.getDiscriminatorOverride()(Context.getASTContext(), Record);
+
+        // If we have a device-number via the discriminator, use that to mangle
+        // the lambda, otherwise use the typical lambda-mangling-number. In
+        // either case, a '0' should be mangled as a normal unnamed class
+        // instead of as a lambda.
+        if (Record->isLambda() &&
+            ((DeviceNumber && *DeviceNumber > 0) ||
+             (!DeviceNumber && Record->getLambdaManglingNumber() > 0))) {
+          assert(!AdditionalAbiTags &&
+                 "Lambda type cannot have additional abi tags");
+          mangleLambda(Record);
+          break;
+        }
+      }
+
+      if (TD->isExternallyVisible()) {
+        unsigned UnnamedMangle = getASTContext().getManglingNumber(TD);
+        Out << "Ut";
+        if (UnnamedMangle > 1)
+          Out << UnnamedMangle - 2;
+        Out << '_';
+        writeAbiTags(TD, AdditionalAbiTags);
+        break;
+      }
+
+      // Get a unique id for the anonymous struct. If it is not a real output
+      // ID doesn't matter so use fake one.
+      unsigned AnonStructId = NullOut ? 0 : Context.getAnonymousStructId(TD);
+
+      // Mangle it as a source name in the form
+      // [n] $_<id>
+      // where n is the length of the string.
+      SmallString<8> Str;
+      Str += "$_";
+      Str += llvm::utostr(AnonStructId);
+
+      Out << Str.size();
+      Out << Str;
       break;
     }
-
-    // Get a unique id for the anonymous struct. If it is not a real output
-    // ID doesn't matter so use fake one.
-    unsigned AnonStructId = NullOut ? 0 : Context.getAnonymousStructId(TD);
-
-    // Mangle it as a source name in the form
-    // [n] $_<id>
-    // where n is the length of the string.
-    SmallString<8> Str;
-    Str += "$_";
-    Str += llvm::utostr(AnonStructId);
-
-    Out << Str.size();
-    Out << Str;
-    break;
-  }
 
   case DeclarationName::ObjCZeroArgSelector:
   case DeclarationName::ObjCOneArgSelector:
@@ -2085,6 +2094,12 @@ void CXXNameMangler::manglePrefix(const DeclContext *DC, bool NoFunction) {
     mangleUnqualifiedName(ND, nullptr);
   } else {
     manglePrefix(Context.getEffectiveDeclContext(ND), NoFunction);
+
+    if (IgnoreInlineNamespaces && isa<NamespaceDecl>(ND) &&
+        cast<NamespaceDecl>(ND)->isInlineNamespace()) {
+      return;
+    }
+
     mangleUnqualifiedName(ND, nullptr);
   }
 
@@ -6433,8 +6448,21 @@ void ItaniumMangleContextImpl::mangleCXXRTTIName(QualType Ty,
   Mangler.mangleType(Ty);
 }
 
+void ItaniumMangleContextImpl::mangleCXXRTTIName(QualType Ty, raw_ostream &Out,
+                                                 bool IgnoreInlineNamespaces) {
+  // <special-name> ::= TS <type>  # typeinfo name (null terminated byte string)
+  CXXNameMangler Mangler(*this, Out, nullptr, false, IgnoreInlineNamespaces);
+  Mangler.getStream() << "_ZTS";
+  Mangler.mangleType(Ty);
+}
+
 void ItaniumMangleContextImpl::mangleTypeName(QualType Ty, raw_ostream &Out) {
   mangleCXXRTTIName(Ty, Out);
+}
+
+void ItaniumMangleContextImpl::mangleTypeNameIgnoringInlineNamespaces(
+    QualType Ty, raw_ostream &Out) {
+  mangleCXXRTTIName(Ty, Out, true);
 }
 
 void ItaniumMangleContextImpl::mangleStringLiteral(const StringLiteral *, raw_ostream &) {
