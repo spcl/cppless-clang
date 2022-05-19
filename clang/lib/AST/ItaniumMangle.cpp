@@ -1417,7 +1417,7 @@ void CXXNameMangler::mangleUnqualifiedName(GlobalDecl GD,
   //                     ::= <ctor-dtor-name>
   //                     ::= <source-name>
   switch (Name.getNameKind()) {
-    y case DeclarationName::Identifier : {
+  case DeclarationName::Identifier : {
       const IdentifierInfo *II = Name.getAsIdentifierInfo();
 
       // We mangle decomposition declarations as the names of their bindings.
