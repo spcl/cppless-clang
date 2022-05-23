@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/CodeGen/BackendUtil.h"
+#include "AltEntryMeta.h"
 #include "clang/Basic/CodeGenOptions.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/LangOptions.h"
@@ -25,8 +26,12 @@
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/Bitcode/BitcodeWriterPass.h"
+#include "llvm/CodeGen/MachineFunctionPass.h"
+#include "llvm/CodeGen/MachineModuleInfo.h"
+#include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/RegAllocRegistry.h"
 #include "llvm/CodeGen/SchedulerRegistry.h"
+#include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/IRPrintingPasses.h"
@@ -90,7 +95,7 @@
 #include "llvm/Transforms/Utils/NameAnonGlobals.h"
 #include "llvm/Transforms/Utils/SymbolRewriter.h"
 #include <memory>
-#include "AltEntryMeta.h"
+#include <vector>
 using namespace clang;
 using namespace llvm;
 
@@ -1504,85 +1509,63 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
   }
 }
 
+class SetMainFunctionPass : public ModulePass {
+public:
+  static char ID;
+  SetMainFunctionPass(std::string mainFunctionName)
+      : ModulePass(ID), mainFunctionName(mainFunctionName) {}
+  bool runOnModule(Module &M) override {
+    auto *mainFunction = M.getFunction("main");
+    if (mainFunction) {
+      mainFunction->setName("_main");
+    }
+
+    auto *newMainFunction = M.getFunction(mainFunctionName);
+    if (newMainFunction) {
+      newMainFunction->setName("main");
+      newMainFunction->setLinkage(GlobalValue::ExternalLinkage);
+    }
+
+    return true;
+  }
+
+private:
+  std::string mainFunctionName;
+};
+
+class RevertMainFunctionPasas : public ModulePass {
+public:
+  static char ID;
+  RevertMainFunctionPasas(std::string mainFunctionName)
+      : ModulePass(ID), mainFunctionName(mainFunctionName) {}
+  bool runOnModule(Module &M) override {
+    auto *newMainFunction = M.getFunction("main");
+    if (newMainFunction) {
+      newMainFunction->setName(mainFunctionName);
+      newMainFunction->setLinkage(GlobalValue::ExternalLinkage);
+    }
+
+    auto *mainFunction = M.getFunction("_main");
+    if (mainFunction) {
+      mainFunction->setName("main");
+    }
+
+    return true;
+  }
+
+private:
+  std::string mainFunctionName;
+};
+
+char SetMainFunctionPass::ID = 0;
+char RevertMainFunctionPasas::ID = 0;
+
 void EmitAssemblyHelper::RunCodegenPipeline(
     BackendAction Action, std::unique_ptr<raw_pwrite_stream> &OS,
     std::unique_ptr<llvm::ToolOutputFile> &DwoOS) {
-  auto AltEntryOutP = CodeGenOpts.AltEntryOutput;
-  if (!AltEntryOutP.empty()) {
-    AltEntryPointMeta AlternativeEntryPoints;
-    auto Parent = llvm::sys::path::parent_path(AltEntryOutP);
-    auto FName = llvm::sys::path::stem(AltEntryOutP);
 
-    int i = 0;
-    for (auto &F : TheModule->getFunctionList()) {
-      if (!F.getFnAttribute("cppless-entry").isValid())
-        continue;
-      std::unique_ptr<llvm::Module> ClonedM = CloneModule(*TheModule);
-
-      auto *ClonedMain = ClonedM->getFunction("main");
-      if (ClonedMain) {
-        // There shouldn't be any uses of the main function, but if there are
-        // we need to remove them
-        ClonedMain->replaceAllUsesWith(
-            Constant::getNullValue(ClonedMain->getType()));
-        ClonedMain->eraseFromParent();
-      }
-
-      auto *ClonedF = ClonedM->getFunction(F.getName());
-      ClonedF->setName("main");
-      ClonedF->setLinkage(GlobalValue::ExternalLinkage);
-
-      llvm::SmallString<128U> ClonedOutName(Parent);
-      llvm::sys::path::append(ClonedOutName,
-                              FName + "_alt_" + std::to_string(i) + ".o");
-      auto OS = openOutputFile(ClonedOutName);
-      if (!OS)
-        return;
-
-      legacy::PassManager CodeGenPasses;
-      switch (Action) {
-      case Backend_EmitAssembly:
-      case Backend_EmitMCNull:
-      case Backend_EmitObj:
-        CodeGenPasses.add(
-            createTargetTransformInfoWrapperPass(getTargetIRAnalysis()));
-        if (!AddEmitPasses(CodeGenPasses, Action, OS->os(), nullptr))
-          // FIXME: Should we handle this error differently?
-          return;
-        break;
-      default:
-        return;
-      }
-
-      std::string UserMeta;
-      UserMeta.clear();
-      auto MA = F.getFnAttribute("cppless-meta");
-      if (MA.isStringAttribute())
-        UserMeta = MA.getValueAsString().str();
-
-      AlternativeEntryPoints.push_back(AltEntryPoint(
-          F.getName().str(), ClonedOutName.str().str(), UserMeta));
-
-      CodeGenPasses.run(*ClonedM);
-
-      // TODO: Find out whether we need to keep this
-      OS->keep();
-      i++;
-    }
-
-    // Construct json file
-    llvm::SmallString<128U> MetaOutName(Parent);
-    llvm::sys::path::append(MetaOutName, FName + ".json");
-    auto MetaOS = openOutputFile(MetaOutName);
-    if (!MetaOS)
-      return;
-
-    llvm::json::OStream J(MetaOS->os());
-    AlternativeEntryPoints.write(J);
-
-    // TODO: Find out whether we need to keep this
-    MetaOS->keep();
-  }
+  std::vector<std::unique_ptr<llvm::ToolOutputFile>> OutFiles;
+  LLVMTargetMachine *LTM = static_cast<LLVMTargetMachine *>(TM.get());
 
   // We still use the legacy PM to run the codegen pipeline since the new PM
   // does not work with the codegen pipeline.
@@ -1593,19 +1576,99 @@ void EmitAssemblyHelper::RunCodegenPipeline(
   switch (Action) {
   case Backend_EmitAssembly:
   case Backend_EmitMCNull:
-  case Backend_EmitObj:
+  case Backend_EmitObj: {
+    auto *MMIWP = new MachineModuleInfoWrapperPass(LTM);
+
     CodeGenPasses.add(
         createTargetTransformInfoWrapperPass(getTargetIRAnalysis()));
+
     if (!CodeGenOpts.SplitDwarfOutput.empty()) {
       DwoOS = openOutputFile(CodeGenOpts.SplitDwarfOutput);
       if (!DwoOS)
         return;
     }
-    if (!AddEmitPasses(CodeGenPasses, Action, *OS,
-                       DwoOS ? &DwoOS->os() : nullptr))
-      // FIXME: Should we handle this error differently?
+
+    // Add LibraryInfo.
+    llvm::Triple TargetTriple(TheModule->getTargetTriple());
+    std::unique_ptr<TargetLibraryInfoImpl> TLII(
+        createTLII(TargetTriple, CodeGenOpts));
+    CodeGenPasses.add(new TargetLibraryInfoWrapperPass(*TLII));
+
+    // Normal mode, emit a .s or .o file by running the code generator. Note,
+    // this also adds codegenerator level optimization passes.
+    CodeGenFileType CGFT = getCodeGenFileType(Action);
+
+    // Add ObjC ARC final-cleanup optimizations. This is done as part of the
+    // "codegen" passes so that it isn't run multiple times when there is
+    // inlining happening.
+    if (CodeGenOpts.OptimizationLevel > 0)
+      CodeGenPasses.add(createObjCARCContractPass());
+
+    TargetPassConfig *PassConfig = LTM->createPassConfig(CodeGenPasses);
+    // Set PassConfig options provided by TargetMachine.
+    PassConfig->setDisableVerify(!CodeGenOpts.VerifyModule);
+    CodeGenPasses.add(PassConfig);
+    CodeGenPasses.add(MMIWP);
+
+    if (PassConfig->addISelPasses())
       return;
-    break;
+    PassConfig->addMachinePasses();
+    PassConfig->setInitialized();
+
+    if (!PassConfig)
+      return;
+
+    if (TargetPassConfig::willCompleteCodeGenPipeline()) {
+      // if (LTM->addAsmPrinter(CodeGenPasses, *OS, DwoOS ? &DwoOS->os() :
+      // nullptr,
+      //                        CGFT, MMIWP->getMMI().getContext()))
+      //   return;
+
+      int i = 0;
+      auto AltEntryOutP = CodeGenOpts.AltEntryOutput;
+      if (!AltEntryOutP.empty()) {
+        AltEntryPointMeta AlternativeEntryPoints;
+        auto Parent = llvm::sys::path::parent_path(AltEntryOutP);
+        auto FName = llvm::sys::path::stem(AltEntryOutP);
+        for (auto &F : TheModule->getFunctionList()) {
+          if (!F.getFnAttribute("cppless-entry").isValid())
+            continue;
+
+          llvm::SmallString<128U> ClonedOutName(Parent);
+          llvm::sys::path::append(ClonedOutName,
+                                  FName + "_alt_" + std::to_string(i) + ".o");
+          auto AltOS = openOutputFile(ClonedOutName);
+          OutFiles.push_back(std::move(AltOS));
+
+          if (!OS)
+            return;
+
+          i++;
+
+          // auto *setMainPass = new SetMainFunctionPass(F.getName().str());
+          // CodeGenPasses.add(setMainPass);
+          // auto *AltMMIWP = new MachineModuleInfoWrapperPass(LTM);
+          // CodeGenPasses.add(AltMMIWP);
+          if (LTM->addAsmPrinter(CodeGenPasses, OutFiles.back().get()->os(),
+                                 nullptr, CGFT, MMIWP->getMMI().getContext()))
+            return;
+          // auto *revertMainPass =
+          //     new RevertMainFunctionPasas(F.getName().str());
+          // CodeGenPasses.add(revertMainPass);
+
+          AltOS->keep();
+        }
+      }
+
+    } else {
+      // MIR printing is redundant with -filetype=null.
+      if (CGFT != CGFT_Null) {
+        CodeGenPasses.add(createPrintMIRPass(*OS));
+      }
+    }
+
+    CodeGenPasses.add(createFreeMachineFunctionPass());
+  } break;
   default:
     return;
   }
@@ -1614,6 +1677,11 @@ void EmitAssemblyHelper::RunCodegenPipeline(
     PrettyStackTraceString CrashInfo("Code generation");
     llvm::TimeTraceScope TimeScope("CodeGenPasses");
     CodeGenPasses.run(*TheModule);
+  }
+
+  {
+    PrettyStackTraceString CrashInfo("Code generation");
+    llvm::TimeTraceScope TimeScope("EmitAsmAltEntryPasses");
   }
 }
 
