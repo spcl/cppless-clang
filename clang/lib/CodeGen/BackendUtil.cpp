@@ -1619,10 +1619,9 @@ void EmitAssemblyHelper::RunCodegenPipeline(
       return;
 
     if (TargetPassConfig::willCompleteCodeGenPipeline()) {
-      // if (LTM->addAsmPrinter(CodeGenPasses, *OS, DwoOS ? &DwoOS->os() :
-      // nullptr,
-      //                        CGFT, MMIWP->getMMI().getContext()))
-      //   return;
+      if (LTM->addAsmPrinter(CodeGenPasses, *OS, DwoOS ? &DwoOS->os() : nullptr,
+                             CGFT, MMIWP->getMMI().getContext()))
+        return;
 
       int i = 0;
       auto AltEntryOutP = CodeGenOpts.AltEntryOutput;
@@ -1640,23 +1639,21 @@ void EmitAssemblyHelper::RunCodegenPipeline(
           auto AltOS = openOutputFile(ClonedOutName);
           OutFiles.push_back(std::move(AltOS));
 
-          if (!OS)
-            return;
-
           i++;
 
-          // auto *setMainPass = new SetMainFunctionPass(F.getName().str());
-          // CodeGenPasses.add(setMainPass);
-          // auto *AltMMIWP = new MachineModuleInfoWrapperPass(LTM);
-          // CodeGenPasses.add(AltMMIWP);
-          if (LTM->addAsmPrinter(CodeGenPasses, OutFiles.back().get()->os(),
-                                 nullptr, CGFT, MMIWP->getMMI().getContext()))
-            return;
-          // auto *revertMainPass =
-          //     new RevertMainFunctionPasas(F.getName().str());
-          // CodeGenPasses.add(revertMainPass);
+          auto *setMainPass = new SetMainFunctionPass(F.getName().str());
+          CodeGenPasses.add(setMainPass);
+          auto *AltMMIWP = new MachineModuleInfoWrapperPass(LTM);
+          CodeGenPasses.add(AltMMIWP);
 
-          AltOS->keep();
+          if (LTM->addAsmPrinter(CodeGenPasses, OutFiles.back().get()->os(),
+                                 nullptr, CGFT,
+                                 AltMMIWP->getMMI().getContext()))
+            return;
+          auto *revertMainPass = new RevertMainFunctionPasas(F.getName().str());
+          CodeGenPasses.add(revertMainPass);
+
+          OutFiles.back()->keep();
         }
       }
 
