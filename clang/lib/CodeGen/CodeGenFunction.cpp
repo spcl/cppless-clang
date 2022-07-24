@@ -970,23 +970,6 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
     Fn->addFnAttr(llvm::Attribute::NoRecurse);
   if (FD && (FD->hasAttr<EntryAttr>())) {
     Fn->addFnAttr("cppless-entry");
-
-    // Iterate through all decls
-
-    for (auto *decl : FD->decls()) {
-      if (decl->getKind() == Decl::Kind::Var) {
-        // Evaluate as constexpr
-        auto *VD = cast<VarDecl>(decl);
-        if (!VD->isConstexpr())
-          continue;
-        auto *V = VD->evaluateValue();
-        if (V == nullptr)
-          continue;
-        VD->getType().print(llvm::errs(), getContext().getPrintingPolicy(), "",
-                            3);
-        V->printPretty(llvm::errs(), getContext(), VD->getType());
-      }
-    }
   }
   if (FD && (FD->hasAttr<MetaAttr>())) {
     auto *MA = FD->getAttr<MetaAttr>();
