@@ -1805,6 +1805,7 @@ private:
   ExprResult ParseUnaryExprOrTypeTraitExpression();
   ExprResult ParseBuiltinPrimaryExpression();
   ExprResult ParseSYCLUniqueStableNameExpression();
+  ExprResult ParseUniqueStableNameExpression();
 
   ExprResult ParseExprAfterUnaryExprOrTypeTrait(const Token &OpTok,
                                                      bool &isCastExpr,

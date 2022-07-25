@@ -567,13 +567,13 @@ std::string SYCLUniqueStableNameExpr::ComputeName(ASTContext &Context,
     return llvm::None;
   };
 
-  std::unique_ptr<MangleContext> Ctx{ItaniumMangleContext::create(
+  std::unique_ptr<ItaniumMangleContext> Ctx{ItaniumMangleContext::create(
       Context, Context.getDiagnostics(), MangleCallback)};
 
   std::string Buffer;
   Buffer.reserve(128);
   llvm::raw_string_ostream Out(Buffer);
-  Ctx->mangleTypeName(Ty, Out);
+  Ctx->mangleTypeNameIgnoringInlineNamespaces(Ty, Out);
 
   return Out.str();
 }

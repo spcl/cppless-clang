@@ -2657,7 +2657,7 @@ Decl *TemplateDeclInstantiator::VisitCXXMethodDecl(
 
   // PR17480: Honor the used attribute to instantiate member function
   // definitions
-  if (Method->hasAttr<UsedAttr>()) {
+  if (Method->hasAttr<UsedAttr>() || Method->hasAttr<EntryAttr>()) {
     if (const auto *A = dyn_cast<CXXRecordDecl>(Owner)) {
       SourceLocation Loc;
       if (const MemberSpecializationInfo *MSInfo =

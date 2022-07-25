@@ -44,6 +44,7 @@
 #include "llvm/Passes/StandardInstrumentations.h"
 #include "llvm/Support/BuryPointer.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/TimeProfiler.h"
@@ -82,12 +83,14 @@
 #include "llvm/Transforms/Scalar/LowerMatrixIntrinsics.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/CanonicalizeAliases.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Debugify.h"
 #include "llvm/Transforms/Utils/EntryExitInstrumenter.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/Transforms/Utils/NameAnonGlobals.h"
 #include "llvm/Transforms/Utils/SymbolRewriter.h"
 #include <memory>
+#include "AltEntryMeta.h"
 using namespace clang;
 using namespace llvm;
 
@@ -1504,6 +1507,83 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
 void EmitAssemblyHelper::RunCodegenPipeline(
     BackendAction Action, std::unique_ptr<raw_pwrite_stream> &OS,
     std::unique_ptr<llvm::ToolOutputFile> &DwoOS) {
+  auto AltEntryOutP = CodeGenOpts.AltEntryOutput;
+  if (!AltEntryOutP.empty()) {
+    AltEntryPointMeta AlternativeEntryPoints;
+    auto Parent = llvm::sys::path::parent_path(AltEntryOutP);
+    auto FName = llvm::sys::path::stem(AltEntryOutP);
+
+    int i = 0;
+    for (auto &F : TheModule->getFunctionList()) {
+      if (!F.getFnAttribute("cppless-entry").isValid())
+        continue;
+      std::unique_ptr<llvm::Module> ClonedM = CloneModule(*TheModule);
+
+      auto *ClonedMain = ClonedM->getFunction("main");
+      if (ClonedMain) {
+        // There shouldn't be any uses of the main function, but if there are
+        // we need to remove them
+        ClonedMain->replaceAllUsesWith(
+            Constant::getNullValue(ClonedMain->getType()));
+        ClonedMain->eraseFromParent();
+      }
+
+      auto *ClonedF = ClonedM->getFunction(F.getName());
+      ClonedF->setName("main");
+      ClonedF->setLinkage(GlobalValue::ExternalLinkage);
+
+      llvm::SmallString<128U> ClonedOutName(Parent);
+      llvm::sys::path::append(ClonedOutName,
+                              FName + "_alt_" + std::to_string(i) + ".o");
+      auto OS = openOutputFile(ClonedOutName);
+      if (!OS)
+        return;
+
+      legacy::PassManager CodeGenPasses;
+      switch (Action) {
+      case Backend_EmitAssembly:
+      case Backend_EmitMCNull:
+      case Backend_EmitObj:
+        CodeGenPasses.add(
+            createTargetTransformInfoWrapperPass(getTargetIRAnalysis()));
+        if (!AddEmitPasses(CodeGenPasses, Action, OS->os(), nullptr))
+          // FIXME: Should we handle this error differently?
+          return;
+        break;
+      default:
+        return;
+      }
+
+      std::string UserMeta;
+      UserMeta.clear();
+      auto MA = F.getFnAttribute("cppless-meta");
+      if (MA.isStringAttribute())
+        UserMeta = MA.getValueAsString().str();
+
+      AlternativeEntryPoints.push_back(AltEntryPoint(
+          F.getName().str(), ClonedOutName.str().str(), UserMeta));
+
+      CodeGenPasses.run(*ClonedM);
+
+      // TODO: Find out whether we need to keep this
+      OS->keep();
+      i++;
+    }
+
+    // Construct json file
+    llvm::SmallString<128U> MetaOutName(Parent);
+    llvm::sys::path::append(MetaOutName, FName + ".json");
+    auto MetaOS = openOutputFile(MetaOutName);
+    if (!MetaOS)
+      return;
+
+    llvm::json::OStream J(MetaOS->os());
+    AlternativeEntryPoints.write(J);
+
+    // TODO: Find out whether we need to keep this
+    MetaOS->keep();
+  }
+
   // We still use the legacy PM to run the codegen pipeline since the new PM
   // does not work with the codegen pipeline.
   // FIXME: make the new PM work with the codegen pipeline.

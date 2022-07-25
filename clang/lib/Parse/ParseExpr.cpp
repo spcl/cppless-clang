@@ -1472,6 +1472,9 @@ ExprResult Parser::ParseCastExpression(CastParseKind ParseKind,
   case tok::kw___builtin_sycl_unique_stable_name:
     Res = ParseSYCLUniqueStableNameExpression();
     break;
+  case tok::kw___builtin_unique_stable_name:
+    Res = ParseUniqueStableNameExpression();
+    break;
 
   case tok::annot_typename:
     if (isStartOfObjCClassMessageMissingOpenBracket()) {
@@ -2366,6 +2369,32 @@ ExprResult Parser::ParseSYCLUniqueStableNameExpression() {
   // __builtin_sycl_unique_stable_name expressions are always parenthesized.
   if (T.expectAndConsume(diag::err_expected_lparen_after,
                          "__builtin_sycl_unique_stable_name"))
+    return ExprError();
+
+  TypeResult Ty = ParseTypeName();
+
+  if (Ty.isInvalid()) {
+    T.skipToEnd();
+    return ExprError();
+  }
+
+  if (T.consumeClose())
+    return ExprError();
+
+  return Actions.ActOnSYCLUniqueStableNameExpr(OpLoc, T.getOpenLocation(),
+                                               T.getCloseLocation(), Ty.get());
+}
+
+ExprResult Parser::ParseUniqueStableNameExpression() {
+  assert(Tok.is(tok::kw___builtin_unique_stable_name) &&
+         "Not __builtin_unique_stable_name");
+
+  SourceLocation OpLoc = ConsumeToken();
+  BalancedDelimiterTracker T(*this, tok::l_paren);
+
+  // __builtin_sycl_unique_stable_name expressions are always parenthesized.
+  if (T.expectAndConsume(diag::err_expected_lparen_after,
+                         "__builtin_unique_stable_name"))
     return ExprError();
 
   TypeResult Ty = ParseTypeName();

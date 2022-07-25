@@ -190,6 +190,9 @@ public:
   virtual void mangleCXXDtorComdat(const CXXDestructorDecl *D,
                                    raw_ostream &) = 0;
 
+  virtual void mangleTypeNameIgnoringInlineNamespaces(QualType T,
+                                                      raw_ostream &) = 0;
+
   virtual void mangleLambdaSig(const CXXRecordDecl *Lambda, raw_ostream &) = 0;
 
   virtual void mangleDynamicStermFinalizer(const VarDecl *D, raw_ostream &) = 0;

@@ -6862,6 +6862,9 @@ public:
   /// Build a FieldDecl suitable to hold the given capture.
   FieldDecl *BuildCaptureField(RecordDecl *RD, const sema::Capture &Capture);
 
+  /// Build a CXXMethod returning the number of variables the lambda captures.
+  CXXMethodDecl *BuildLambdaCaptureCountMethod(CXXRecordDecl *RD,
+                                               int CaptureCount);
   /// Initialize the given capture with a suitable expression.
   ExprResult BuildCaptureInit(const sema::Capture &Capture,
                               SourceLocation ImplicitCaptureLoc,

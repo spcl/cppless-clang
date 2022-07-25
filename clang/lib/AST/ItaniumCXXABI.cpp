@@ -280,7 +280,7 @@ public:
 
   std::unique_ptr<MangleNumberingContext>
   createMangleNumberingContext() const override {
-    if (Context.getLangOpts().isSYCL())
+    if (Context.getLangOpts().isSYCL() || Context.getLangOpts().isCppless())
       return std::make_unique<ItaniumSYCLNumberingContext>(
           cast<ItaniumMangleContext>(Mangler.get()));
     return std::make_unique<ItaniumNumberingContext>(
